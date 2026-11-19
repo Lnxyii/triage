@@ -1,0 +1,19 @@
+{
+  "name": "triage",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Triage — bug-report triage with Firebase AI Logic hybrid inference (Gemini Nano on-device, Gemini in the cloud). Built for #BuildHybridAI 2026.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --strictPort"
+  },
+  "dependencies": {
+    "firebase": "^12.5.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

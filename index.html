@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Triage: bug-report triage with Firebase AI Logic hybrid inference. Gemini Nano on-device when available, Gemini in the cloud otherwise."
+    />
+    <meta name="theme-color" content="#f7f8f9" />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#222a3a"
+    />
+    <meta property="og:title" content="Triage — Bug-report triage, on-device first" />
+    <meta
+      property="og:description"
+      content="Paste a bug report and get a structured, severity-ranked triage in one click. Gemini Nano on-device when available, Gemini in the cloud otherwise."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://triage-hackathon-2ae3f.web.app/" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Triage — Bug-report triage, on-device first" />
+    <meta
+      name="twitter:description"
+      content="Paste a bug report and get a structured, severity-ranked triage in one click. Gemini Nano on-device when available, Gemini in the cloud otherwise."
+    />
+    <title>Triage: Bug-report triage, on-device first</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="stylesheet" href="src/style.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" transform="rotate(45 10 10)" fill="none" stroke="currentColor" stroke-width="2"/></svg></span>
+        <div>
+          <h1>Triage</h1>
+          <p class="tagline">Bug-report triage, on-device first.</p>
+        </div>
+      </div>
+      <div class="engine-chip" id="engine-chip" title="Which engine answered the last triage">
+        <span id="engine-chip-text">Checking engines…</span>
+      </div>
+    </header>
+
+    <main class="layout" id="main">
+      <section class="card input-card">
+        <h2>Report to triage</h2>
+        <p class="hint">
+          Paste a bug report or support message. Short reports are triaged
+          on-device by Gemini Nano when available, otherwise in the cloud;
+          long threads go to Gemini in the cloud for a full report, and short
+          reports that look like security issues get the full report too —
+          on-device when Nano is available, otherwise in the cloud.
+        </p>
+        <label class="visually-hidden" for="report-input">Bug report</label>
+        <textarea
+          id="report-input"
+          rows="10"
+          maxlength="20000"
+          placeholder="Example: The app crashes every time I tap “Save” after editing my profile photo…"
+        ></textarea>
+        <div
+          class="route-meter"
+          id="route-meter"
+          role="meter"
+          aria-label="Characters toward the 1200-character full-report route threshold"
+          aria-valuemin="0"
+          aria-valuemax="1200"
+          aria-valuenow="0"
+        >
+          <div class="route-meter-fill" id="route-meter-fill"></div>
+        </div>
+        <div class="input-meta">
+          <span id="char-count" class="num">0 characters</span>
+          <span id="route-hint">Route: quick triage (Gemini Nano when available, else cloud)</span>
+        </div>
+        <p class="fineprint warn" id="input-warning" hidden></p>
+
+        <label class="scrub-toggle" for="scrub-toggle">
+          <input type="checkbox" id="scrub-toggle" checked>
+          Scrub sensitive details (emails, tokens, keys) before any AI call
+        </label>
+        <p class="fineprint" id="scrub-note" hidden></p>
+
+        <label class="context-field" for="project-context">
+          <span>Project context (optional)</span>
+          <input type="text" id="project-context" maxlength="200" placeholder="e.g. E-commerce app, React + Node.js" autocomplete="off">
+        </label>
+        <p class="fineprint">Sent only inside the triage prompts, so repro steps and recommendations name your stack. Stored in this browser.</p>
+
+        <label class="scrub-toggle" for="force-local-toggle">
+          <input type="checkbox" id="force-local-toggle">
+          Force on-device processing for long reports
+        </label>
+        <p class="fineprint">Long reports are truncated to 8,000 characters for the on-device model. Falls back to the cloud if on-device is unavailable — the badge will say so.</p>
+
+        <div class="samples">
+          <span class="samples-label">Try a sample:</span>
+          <div id="sample-buttons" class="sample-buttons"></div>
+        </div>
+
+        <div class="actions">
+          <button id="triage-btn" class="btn primary">Triage report</button>
+          <button id="clear-btn" class="btn ghost">Clear</button>
+        </div>
+        <p class="fineprint" id="config-note"></p>
+      </section>
+
+      <details class="card engine-card" id="engines-details">
+        <summary>
+          <span class="summary-title">Engines</span>
+          <span class="summary-note">Gemini Nano on-device + Gemini Flash cloud — live status inside</span>
+        </summary>
+        <dl class="engine-list">
+          <div>
+            <dt>On-device (Gemini Nano)</dt>
+            <dd id="nano-status">Checking…</dd>
+          </div>
+          <div>
+            <dt>Cloud (Gemini Flash)</dt>
+            <dd id="cloud-status">Checking…</dd>
+          </div>
+          <div>
+            <dt>Inference mode</dt>
+            <dd id="mode-status" class="num">PREFER_ON_DEVICE</dd>
+          </div>
+        </dl>
+        <button id="prepare-btn" class="btn secondary" disabled>
+          Prepare on-device model
+        </button>
+        <p class="fineprint" id="prepare-note"></p>
+        <p class="fineprint">
+          On-device inference needs Chrome on Desktop 139+ with the Prompt API
+          (flag-free from Chrome 148). The model downloads once; quick triage
+          can then run offline, while long threads still need the cloud.
+        </p>
+        <p class="fineprint">
+          Every triage result shows a badge naming the engine that answered,
+          so you always know where your report was processed.
+        </p>
+        <p class="fineprint">
+          Availability depends on your device and browser — mobile and other
+          browsers use the cloud.
+        </p>
+      </details>
+
+      <details class="card how-card" id="how-hybrid">
+        <summary>
+          <span class="summary-title">How hybrid works</span>
+          <span class="summary-note">Short reports on-device; long threads and security issues get the full report</span>
+        </summary>
+        <ol class="how-list">
+          <li>
+            <strong>Short reports start on-device.</strong> Gemini Nano runs
+            in your browser, so the text never leaves your device.
+          </li>
+          <li>
+            <strong>Long threads go to the cloud.</strong> Anything over
+            1,200 characters is answered by Gemini Flash in the cloud with a
+            full report. A short report that looks like a security issue gets
+            the full report too — on-device when Gemini Nano is available,
+            otherwise in the cloud.
+          </li>
+          <li>
+            <strong>Every result names its engine.</strong> The badge on each
+            result says On-device · Gemini Nano or Cloud · Gemini Flash, with
+            the latency.
+          </li>
+        </ol>
+        <p class="fineprint">
+          On-device needs Chrome Desktop 139+ with Gemini Nano downloaded; on
+          other machines everything runs in the cloud and the badge says so.
+          In our live tests, quick triage answered in about 1–2 seconds via
+          the cloud.
+        </p>
+        <p class="fineprint">
+          Adversarial traps: 5/5 judged correctly on the merits in live
+          tests on 19 Nov 2026 — including a prompt-injection report the
+          model correctly ignored.
+        </p>
+      </details>
+
+      <section class="card result-card" id="result-card" aria-live="polite">
+        <div class="result-empty" id="result-empty">
+          <p class="empty-title">No report triaged yet.</p>
+          <p>
+            Paste a report above and press <strong>Triage report</strong>. The
+            result shows its severity, reproduction steps, and a draft reply,
+            plus which engine answered, and how fast.
+          </p>
+          <ol class="empty-steps">
+            <li>Paste a report, or pick a sample below the input.</li>
+            <li>Press <strong>Triage report</strong> for a quick triage.</li>
+            <li>
+              Escalate to a full report when you need a CVSS score, impact,
+              and recommendation.
+            </li>
+          </ol>
+        </div>
+        <div class="result-loading" id="result-loading" hidden>
+          <p class="spinner" aria-hidden="true"></p>
+          <p id="loading-text">Triaging…</p>
+        </div>
+        <div class="result-body" id="result-body" hidden></div>
+        <div class="result-error" id="result-error" hidden></div>
+      </section>
+
+      <section class="card history-card">
+        <div class="history-head">
+          <h2>History</h2>
+          <button id="clear-history-btn" class="btn ghost small">Clear history</button>
+        </div>
+        <p class="fineprint">
+          Stored only in this browser (localStorage). Nothing leaves the device
+          except the text you send to the model.
+        </p>
+        <div class="history-controls">
+          <label class="visually-hidden" for="history-search">Search history</label>
+          <input type="search" id="history-search" placeholder="Search history…" autocomplete="off">
+          <label class="visually-hidden" for="history-severity-filter">Filter by severity</label>
+          <select id="history-severity-filter">
+            <option value="">All severities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+          </select>
+          <label class="visually-hidden" for="history-export-format">History export format</label>
+          <select id="history-export-format">
+            <option value="json">JSON</option>
+            <option value="csv">CSV</option>
+          </select>
+          <button id="export-history-btn" class="btn ghost small" type="button">Export history</button>
+        </div>
+        <p class="fineprint num" id="history-filter-note" hidden></p>
+        <p class="fineprint num" id="history-stats" hidden></p>
+        <ul class="history-list" id="history-list"></ul>
+        <p class="history-empty" id="history-empty">No triaged reports yet.</p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        Built for <strong>#BuildHybridAI 2026</strong> with Firebase AI Logic
+        hybrid inference: Gemini Nano on-device, Gemini in the cloud.
+        <span id="footer-mode"></span>
+        <span id="footer-build" class="num"></span>
+      </p>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

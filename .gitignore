@@ -1,0 +1,9 @@
+node_modules
+dist
+dist-debug
+.env
+.DS_Store
+# App Check debug tokens and any local verification scripts holding secrets
+# must never be committed — they live outside the repo (goal workspace).
+*debug-token*
+*-debug-token*
