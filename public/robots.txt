@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://triage-hackathon-2ae3f.web.app/sitemap.xml
