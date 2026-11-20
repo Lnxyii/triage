@@ -16,7 +16,7 @@ export function loadHistory() {
 
 export function addHistoryEntry({ report, result }) {
   const entries = loadHistory()
-  entries.unshift({
+  const entry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     at: new Date().toISOString(),
     title:
@@ -29,13 +29,47 @@ export function addHistoryEntry({ report, result }) {
     latencyMs: result.latencyMs,
     report,
     result,
-  })
+  }
+  entries.unshift(entry)
   try {
     localStorage.setItem(KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)))
   } catch {
     // Storage full or unavailable — history is a nice-to-have.
   }
-  return entries.slice(0, MAX_ENTRIES)
+  return entry
+}
+
+// Escalation: replace one entry's result in place (same id, moved to the
+// top, timestamp refreshed to the escalation). Used when "Generate full
+// report" upgrades the quick result of the same report — one report
+// stays one history entry instead of becoming a duplicate of itself.
+// Returns the updated entry, or null when the id is not in history.
+export function updateHistoryEntry(id, { report, result }) {
+  const entries = loadHistory()
+  const idx = entries.findIndex((e) => e.id === id)
+  if (idx === -1) return null
+  const entry = {
+    ...entries[idx],
+    at: new Date().toISOString(),
+    title:
+      result.kind === 'full'
+        ? result.data.title
+        : result.data.summary || report.slice(0, 80),
+    severity: result.data.severity,
+    engine: result.engine,
+    kind: result.kind,
+    latencyMs: result.latencyMs,
+    report,
+    result,
+  }
+  entries.splice(idx, 1)
+  entries.unshift(entry)
+  try {
+    localStorage.setItem(KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)))
+  } catch {
+    // Storage full or unavailable — history is a nice-to-have.
+  }
+  return entry
 }
 
 export function clearHistory() {

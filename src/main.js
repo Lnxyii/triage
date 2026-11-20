@@ -14,7 +14,7 @@ import { scrubReport, describeRedactions } from './scrub.js'
 import { findDuplicate } from './duplicate.js'
 import { resultToCsv, historyToCsv, buildIssueUrl } from './export.js'
 import { SAMPLES } from './samples.js'
-import { loadHistory, addHistoryEntry, clearHistory, deleteHistoryEntry } from './history.js'
+import { loadHistory, addHistoryEntry, updateHistoryEntry, clearHistory, deleteHistoryEntry } from './history.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -173,6 +173,7 @@ const REPO_URL = 'https://github.com/Lnxyii/triage'
 const REPO_LIVE = true
 
 let lastResult = null
+let lastHistoryId = null
 let lastIssueUrl = null
 let lastIssueTruncated = false
 let lastReport = ''
@@ -661,15 +662,36 @@ async function runTriage({ forceFull = false, demoOnly = false } = {}) {
       setPipelineStage('render')
     }
     lastResult = result
+    // Escalation: "Generate full report" re-triages the same text that
+    // produced the currently displayed quick result. It upgrades that
+    // history entry in place (same id) instead of adding a second entry
+    // for the same report — and the duplicate check must not match the
+    // entry against itself. Only when the text is unchanged: if the user
+    // edited the report first, it is a new report and gets a new entry.
+    const escalatedEntry =
+      forceFull && lastHistoryId
+        ? loadHistory().find((e) => e.id === lastHistoryId)
+        : null
+    const isEscalation =
+      !!escalatedEntry && escalatedEntry.report === result.report
     // Duplicate check runs against the history BEFORE this entry is added,
     // so the new result never matches itself.
-    const duplicate = findDuplicate(result.report, loadHistory())
+    const duplicate = findDuplicate(
+      result.report,
+      isEscalation
+        ? loadHistory().filter((e) => e.id !== lastHistoryId)
+        : loadHistory(),
+    )
     renderResult(result, { duplicate })
     // Render done — the result is on screen; every stage is complete.
     setPipelineStage(null)
     // History stores the scrubbed text — the text the model actually
     // saw — so secrets never reach localStorage either.
-    addHistoryEntry({ report: result.report, result })
+    if (isEscalation) {
+      updateHistoryEntry(lastHistoryId, { report: result.report, result })
+    } else {
+      lastHistoryId = addHistoryEntry({ report: result.report, result }).id
+    }
     renderHistory()
     setChip(result.engine)
     // Once per session, point at the export after the first triage.
@@ -848,6 +870,9 @@ historyList.addEventListener('click', (event) => {
   input.value = entry.report
   updateRouteHint()
   lastResult = entry.result
+  // Escalating a reloaded entry upgrades that entry in place, same as
+  // escalating the result just triaged above.
+  lastHistoryId = entry.id
   renderResult(entry.result)
   setChip(entry.result.engine)
   document
