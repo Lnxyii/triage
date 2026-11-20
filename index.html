@@ -204,6 +204,12 @@
         </div>
         <div class="result-loading" id="result-loading" hidden>
           <p class="spinner" aria-hidden="true"></p>
+          <ol class="pipeline" id="pipeline" aria-label="Triage pipeline progress">
+            <li data-stage="scrub" data-state="pending"><span class="stage-mark" aria-hidden="true"></span>Scrub sensitive details</li>
+            <li data-stage="route" data-state="pending"><span class="stage-mark" aria-hidden="true"></span>Decide route</li>
+            <li data-stage="ai" data-state="pending"><span class="stage-mark" aria-hidden="true"></span>AI triage</li>
+            <li data-stage="render" data-state="pending"><span class="stage-mark" aria-hidden="true"></span>Render result</li>
+          </ol>
           <p id="loading-text">Triaging…</p>
         </div>
         <div class="result-body" id="result-body" hidden></div>
@@ -237,6 +243,12 @@
           </select>
           <button id="export-history-btn" class="btn ghost small" type="button">Export history</button>
         </div>
+        <div class="route-filter" id="history-route-filter" role="group" aria-label="Filter history by engine route">
+          <button type="button" class="route-pill active" data-route="" aria-pressed="true">All routes</button>
+          <button type="button" class="route-pill" data-route="on_device" aria-pressed="false">Local</button>
+          <button type="button" class="route-pill" data-route="in_cloud" aria-pressed="false">Cloud</button>
+          <button type="button" class="route-pill" data-route="demo" aria-pressed="false">Demo</button>
+        </div>
         <p class="fineprint num" id="history-filter-note" hidden></p>
         <p class="fineprint num" id="history-stats" hidden></p>
         <ul class="history-list" id="history-list"></ul>
@@ -251,6 +263,7 @@
         <span id="footer-mode"></span>
         <span id="footer-build" class="num"></span>
       </p>
+      <p class="stack-line num">Vite · Firebase AI Logic · Gemini Nano (local) / Gemini Flash (cloud)</p>
     </footer>
 
     <script type="module" src="/src/main.js"></script>

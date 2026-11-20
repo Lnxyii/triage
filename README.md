@@ -82,7 +82,9 @@ note hiding a real session-token breach; an all-caps alarm about a version
 number; a PoC that does not reproduce; a bug in a third-party component.
 All five were judged correctly on the merits against the live cloud model
 on 19 Nov 2026 — including the prompt-injection trap, also verified on
-the deployed demo.
+the deployed demo — and re-verified live on 20 Nov 2026 (5/5 again: the
+quiet session-token trap now scores High, CVSS 6.5, and the long-thread
+trap still scores Critical, CVSS 9.1).
 
 ## Demo mode
 
@@ -160,6 +162,8 @@ triage-app/
     duplicate.js        Local duplicate check against history
     export.js           Markdown / CSV export of results and history
     history.js          localStorage history
+    net.js              Request timeouts + offline fast-path
+    truncate.js         Head+tail cut for Force Local (8,000 chars)
     style.css           Design
   public/fonts/         Self-hosted fonts (Chakra Petch, IBM Plex Sans/Mono)
   .env.example          Config template (no secrets)
