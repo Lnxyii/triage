@@ -55,10 +55,13 @@ cloud** otherwise. Built for the **#BuildHybridAI 2026** hackathon
 
 ## Hybrid inference, concretely
 
-- One model, `InferenceMode.PREFER_ON_DEVICE`: the Firebase AI Logic SDK
-  tries Gemini Nano first (Chrome Prompt API) and falls back to
-  `gemini-3.5-flash-lite` in the cloud. The full report uses the same plain
-  cloud model (`gemini-3.5-flash-lite`).
+- Quick triage uses one hybrid model, `InferenceMode.PREFER_ON_DEVICE`:
+  the Firebase AI Logic SDK tries Gemini Nano first (Chrome Prompt API)
+  and falls back to `gemini-3.5-flash-lite` in the cloud. Long threads
+  use the plain cloud model (`gemini-3.5-flash-lite`); security-looking
+  short reports — and long reports with Force Local on — run through a
+  second `PREFER_ON_DEVICE` model, which tries Nano first and falls back
+  to the same cloud model.
 - Structured output on both paths: the on-device side constrains the
   response with a JSON schema (`responseConstraint`), the cloud side with
   `responseSchema` + `responseMimeType: application/json`. Prompts and
@@ -97,11 +100,17 @@ connected; it is not the submitted experience.
 ## Run it
 
 ```bash
+git clone https://github.com/Lnxyii/triage.git
+cd triage
 npm install
 npm run dev      # http://localhost:5173
 npm run build    # production build into dist/
 npm run preview  # serve the build on http://localhost:4173
 ```
+
+Without a Firebase config (no `.env` yet) the app runs in demo mode on
+local rules — the same flow, honestly labelled on screen. See Setup
+below for the live AI path.
 
 ## Setup (live AI)
 
@@ -111,7 +120,7 @@ npm run preview  # serve the build on http://localhost:4173
    choose the **Gemini Developer API** provider (not Vertex AI, which
    needs billing).
 3. Register a web app (**Project settings → Your apps → Web**) and copy
-   the config into `triage-app/.env` (create it from `.env.example`).
+   the config into `.env` (create it from `.env.example`).
    Never commit `.env`.
 4. App Check: register the **reCAPTCHA Enterprise (Fraud Defense)**
    provider for the web app and put its site key in `.env` as
@@ -119,9 +128,15 @@ npm run preview  # serve the build on http://localhost:4173
    Google blocks new v3 onboardings.) For local development keep
    `VITE_APPCHECK_DEBUG=true` and register the debug token printed in
    the browser console under **App Check → Apps → Manage debug tokens**.
-5. To use the on-device path: Chrome Desktop 139+, enable on-device AI,
-   and let the model download — the app's "Prepare on-device model"
-   button does this with a progress indicator.
+5. To use the on-device path: use Chrome Desktop 139+, open the app,
+   and click "Prepare on-device model" — it downloads the model with a
+   progress indicator ("Downloading model… NN%"). The download is a few
+   GB (Chrome needs about 22 GB free disk on the profile volume to start
+   it), so give it time and an unmetered connection. If the download
+   stalls, check chrome://components → "Optimization Guide On Device
+   Model" and press "Check for update". If Nano is unavailable on the
+   device, the app falls back to the cloud automatically and the badge
+   says so — it never pretends a cloud call was local.
 
 ## Hosting
 
