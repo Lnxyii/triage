@@ -15,6 +15,52 @@ function csvRows(header, rows) {
   return lines.join('\r\n') + '\r\n'
 }
 
+// GitHub issue export: a pre-filled issue URL on the public repo, opened
+// in a new tab — the user submits it on GitHub, so no token ever enters
+// the browser. Browsers and servers cap practical URL length
+// (~2,000–8,000 chars), so a very long report would be truncated or
+// refused if its Markdown went into ?body= verbatim. The body is
+// therefore shortened until the whole URL fits MAX_ISSUE_URL_CHARS, and
+// the shortening is disclosed inside the body itself, so the user can
+// still open the issue and use Copy as Markdown for the full report.
+// Returns { url, truncated } — the UI shows a notice when truncated.
+export const MAX_ISSUE_URL_CHARS = 7500
+
+export function buildIssueUrl(repoUrl, title, markdown) {
+  const marker =
+    '\n\n[...truncated — this report is too long for a GitHub issue URL. Use Copy as Markdown for the complete report.]'
+  let t = String(title ?? '')
+  let body = String(markdown ?? '')
+  let truncated = false
+  const makeUrl = (tt, bb) =>
+    `${repoUrl}/issues/new?title=${encodeURIComponent(tt)}&body=${encodeURIComponent(bb)}`
+  let url = makeUrl(t, body)
+  if (url.length > MAX_ISSUE_URL_CHARS) {
+    truncated = true
+    // Shrink the body first: it is almost always the long part. Each
+    // pass cuts 10%; bounded, since the body only shrinks.
+    let n = body.length
+    let fitted = false
+    while (n > 0) {
+      const candidate = body.slice(0, n) + marker
+      if (makeUrl(t, candidate).length <= MAX_ISSUE_URL_CHARS) {
+        body = candidate
+        fitted = true
+        break
+      }
+      n = Math.floor(n * 0.9)
+    }
+    if (!fitted) body = marker.trim()
+    url = makeUrl(t, body)
+    // A pathological title alone can still overflow: shorten it too.
+    while (url.length > MAX_ISSUE_URL_CHARS && t.length > 0) {
+      t = t.slice(0, Math.max(0, Math.floor(t.length * 0.9)))
+      url = makeUrl(t, body)
+    }
+  }
+  return { url, truncated }
+}
+
 // One row per triage result: the fields a developer pastes into a tracker
 // or a spreadsheet. Repro steps are joined with " | " so the row stays
 // one line.

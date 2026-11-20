@@ -32,8 +32,24 @@ import {
   SEVERITIES,
 } from './prompts.js'
 import { scrubReport } from './scrub.js'
+import { truncateForLocal, FORCE_LOCAL_MAX_CHARS } from './truncate.js'
+import { withTimeout, friendlyTriageError, isRetryableError } from './net.js'
+
+// Re-exported so the UI can use the same truncation (demo path) without
+// importing the helper module directly.
+export { truncateForLocal, FORCE_LOCAL_MAX_CHARS }
 
 export { isFirebaseConfigured }
+
+// A hung AI call must never leave the Triage button spinning forever:
+// each attempt is abandoned after AI_REQUEST_TIMEOUT_MS (the underlying
+// SDK call keeps running, the UI just stops waiting). Normal calls answer
+// in ~1–8 s; 60 s is generous headroom for a slow-but-real response.
+const AI_REQUEST_TIMEOUT_MS = 60000
+// On-device init is a readiness gate, not a download: the Prepare button
+// owns the deliberate (long) download, with progress shown. If init hangs,
+// fall back to the cloud instead of spinning.
+const DEVICE_INIT_TIMEOUT_MS = 30000
 
 const CLOUD_QUICK_MODEL = 'gemini-3.5-flash-lite'
 // Full report uses the same lite model: gemini-3.8-flash (the API's named
@@ -198,20 +214,6 @@ export async function getEngineStatus() {
   }
 }
 
-// --- Transient-failure retry ------------------------------------------------
-// 429 / 503 / 5xx / network failures are retried twice (2 s, then 5 s)
-// before the error reaches the user. 400 / 401 / 403 are never retried:
-// those are not transient.
-function isRetryableError(err) {
-  const msg = String(err?.message || err || '')
-  if (/400|401|403|app check|permission-denied|unauthenticated|invalid argument/i.test(msg)) {
-    return false
-  }
-  return /429|quota|503|overloaded|deadline expired|unavailable|500|502|504|failed to fetch|network|offline|ERR_INTERNET|ERR_NAME_NOT_RESOLVED/i.test(
-    msg,
-  )
-}
-
 async function withRetry(fn, onRetry) {
   const delaysMs = [2000, 5000]
   let attempt = 0
@@ -345,44 +347,6 @@ export function demoTriage(report, kind) {
   return kind === 'full' ? demoFull(report) : demoQuick(report)
 }
 
-// Map a raw SDK failure to a friendly message for the user. Never surface
-// internal details (gateway URLs, project IDs, model names, repo files).
-function friendlyTriageError(err) {
-  const msg = String(err?.message || err || '')
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    return 'You appear to be offline. Check your connection and try again.'
-  }
-  if (/failed to fetch|network error|networkerror|load failed|offline|ERR_INTERNET|ERR_NAME_NOT_RESOLVED/i.test(msg)) {
-    return 'You appear to be offline. Check your connection and try again.'
-  }
-  if (/401|403|app check|permission-denied|unauthenticated|invalid app check/i.test(msg)) {
-    return 'Authentication failed — please reload the page and try again.'
-  }
-  if (/429|quota|503|overloaded|deadline expired|unavailable|500|502|504|internal error/i.test(msg)) {
-    return 'The AI service is busy or the quota is exhausted. Try again in a moment.'
-  }
-  return 'The AI service could not answer right now. Try again, or use demo mode.'
-}
-
-// Force Local: when the user forces on-device processing, a long report is
-// cut to this many characters first — the on-device model has a much
-// smaller context window than the cloud model, so the cut keeps the call
-// inside it. The cut is always disclosed in the UI (see main.js); the
-// stored history keeps the truncated text, never the part that was cut.
-export const FORCE_LOCAL_MAX_CHARS = 8000
-
-export function truncateForLocal(text) {
-  const s = String(text ?? '')
-  if (s.length <= FORCE_LOCAL_MAX_CHARS) {
-    return { text: s, truncated: false, originalLength: s.length }
-  }
-  return {
-    text: s.slice(0, FORCE_LOCAL_MAX_CHARS),
-    truncated: true,
-    originalLength: s.length,
-  }
-}
-
 // --- Main entry point -----------------------------------------------------
 // The report is scrubbed locally first (src/scrub.js): secret values are
 // replaced by typed placeholders before any AI call — on-device or cloud
@@ -436,6 +400,12 @@ export async function triage(
   }
 
   try {
+    // Fully offline: fail fast with the friendly message instead of
+    // burning two retries on calls that cannot succeed. (The demo path
+    // above never touches the network, so it is unaffected.)
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new Error('You appear to be offline. Check your connection and try again.')
+    }
     if (kind === 'full') {
       // Security reports prefer on-device when Nano is available: they run
       // through the PREFER_ON_DEVICE full model, which falls back to the
@@ -450,8 +420,14 @@ export async function triage(
         if (!fullDeviceModelPrepared) {
           // initializeDeviceModel must run on a user gesture; the Triage
           // button click is one. It is a no-op when the model is ready.
+          // Bounded: if init hangs, fall back to the cloud below instead
+          // of spinning.
           try {
-            await model.initializeDeviceModel()
+            await withTimeout(
+              model.initializeDeviceModel(),
+              DEVICE_INIT_TIMEOUT_MS,
+              'On-device model init',
+            )
             fullDeviceModelPrepared = true
           } catch (e) {
             // On-device init failing must not block the cloud fallback.
@@ -462,7 +438,12 @@ export async function triage(
         model = ensureCloudModel()
       }
       const result = await withRetry(
-        () => model.generateContent(fullReportPrompt(text, cleanContext)),
+        () =>
+          withTimeout(
+            model.generateContent(fullReportPrompt(text, cleanContext)),
+            AI_REQUEST_TIMEOUT_MS,
+            'AI request',
+          ),
         onRetry,
       )
       const data = normaliseFull(parseJsonResponse(result.response.text()))
@@ -487,8 +468,14 @@ export async function triage(
     if (!deviceModelPrepared) {
       // initializeDeviceModel must run on a user gesture; the Triage button
       // click is one. It is a no-op when the model is already ready.
+      // Bounded: if init hangs, fall back to the cloud below instead of
+      // spinning.
       try {
-        await model.initializeDeviceModel()
+        await withTimeout(
+          model.initializeDeviceModel(),
+          DEVICE_INIT_TIMEOUT_MS,
+          'On-device model init',
+        )
         deviceModelPrepared = true
       } catch (e) {
         // On-device init failing must not block the cloud fallback.
@@ -496,7 +483,12 @@ export async function triage(
       }
     }
     const result = await withRetry(
-      () => model.generateContent(quickTriagePrompt(text, cleanContext)),
+      () =>
+        withTimeout(
+          model.generateContent(quickTriagePrompt(text, cleanContext)),
+          AI_REQUEST_TIMEOUT_MS,
+          'AI request',
+        ),
       onRetry,
     )
     const data = normaliseQuick(parseJsonResponse(result.response.text()))

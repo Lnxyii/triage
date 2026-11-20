@@ -12,7 +12,7 @@ import {
 import { routeFor, routeReason, LONG_REPORT_CHARS } from './prompts.js'
 import { scrubReport, describeRedactions } from './scrub.js'
 import { findDuplicate } from './duplicate.js'
-import { resultToCsv, historyToCsv } from './export.js'
+import { resultToCsv, historyToCsv, buildIssueUrl } from './export.js'
 import { SAMPLES } from './samples.js'
 import { loadHistory, addHistoryEntry, clearHistory, deleteHistoryEntry } from './history.js'
 
@@ -36,6 +36,7 @@ const prepareNote = $('prepare-note')
 const resultEmpty = $('result-empty')
 const resultLoading = $('result-loading')
 const loadingText = $('loading-text')
+const pipeline = $('pipeline')
 const resultBody = $('result-body')
 const resultError = $('result-error')
 const historyList = $('history-list')
@@ -51,6 +52,8 @@ const projectContext = $('project-context')
 const forceLocalToggle = $('force-local-toggle')
 const historySearch = $('history-search')
 const historySeverityFilter = $('history-severity-filter')
+const historyRouteFilter = $('history-route-filter')
+let routeFilter = ''
 const historyExportFormat = $('history-export-format')
 const exportHistoryBtn = $('export-history-btn')
 const historyFilterNote = $('history-filter-note')
@@ -72,6 +75,72 @@ function saveProjectContext(value) {
   } catch {
     // Ignore.
   }
+}
+
+// Copy/export buttons morph to a check on success and revert after ~2 s,
+// so the success state is unmistakable but the button never stays renamed.
+function flashButton(btn, doneLabel, revertMs = 2000) {
+  if (!btn) return
+  clearTimeout(btn._flashTimer)
+  const original = btn.dataset.label || btn.textContent
+  btn.dataset.label = original
+  btn.textContent = doneLabel
+  btn._flashTimer = setTimeout(() => {
+    btn.textContent = btn.dataset.label || original
+  }, revertMs)
+}
+
+// Pipeline staged readout: the four real stages of a triage run, in order.
+// Each stage flips to "done" only when the code has actually passed it —
+// scrub, then the route decision, then the AI call, then the render — so
+// the readout can never show a stage the run has not reached.
+const PIPELINE_STAGES = ['scrub', 'route', 'ai', 'render']
+function setPipelineStage(stage) {
+  if (!pipeline) return
+  const idx = stage ? PIPELINE_STAGES.indexOf(stage) : PIPELINE_STAGES.length
+  for (const li of pipeline.querySelectorAll('li')) {
+    const i = PIPELINE_STAGES.indexOf(li.dataset.stage)
+    li.dataset.state = i < idx ? 'done' : i === idx ? 'active' : 'pending'
+  }
+}
+
+// Coachmark: once per session, after the first triage completes, the
+// primary export button's border pulses once to point at the export.
+// One cycle, ink border only, then it stops and never fires again.
+const COACHMARK_KEY = 'triage-coachmark-pulsed'
+function maybePulseExportCoachmark() {
+  let seen = false
+  try {
+    seen = !!sessionStorage.getItem(COACHMARK_KEY)
+    if (!seen) sessionStorage.setItem(COACHMARK_KEY, '1')
+  } catch {
+    return
+  }
+  if (seen) return
+  const btn = $('copy-md-btn')
+  if (!btn) return
+  btn.classList.add('coachmark-pulse')
+  const stop = () => btn.classList.remove('coachmark-pulse')
+  btn.addEventListener('animationend', stop, { once: true })
+  // Fallback for reduced motion, where the animation never runs.
+  setTimeout(stop, 1000)
+}
+
+// Route chip labels for history rows: short mono tags, same engine colours
+// as the badges.
+const ROUTE_CHIP = {
+  on_device: { text: 'LOCAL', cls: 'on-device' },
+  in_cloud: { text: 'CLOUD', cls: 'cloud' },
+  demo: { text: 'DEMO', cls: 'demo' },
+}
+
+// Severity confidence as a filling bar, in the same dimension-string
+// language as the route meter: hairline track, ink fill drawn with scaleX,
+// mono percentage. The value is the model's own overall confidence —
+// nothing is invented per field.
+function confidenceHtml(confidence) {
+  const pct = Math.round(confidence * 100)
+  return `<p class="confidence"><span>Severity confidence</span><span class="confidence-meter" role="meter" aria-label="Severity confidence ${pct} percent" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="confidence-meter-fill" style="transform: scaleX(${confidence})"></span></span><span class="num">${pct}%</span></p>`
 }
 
 // Download helper shared by the .md / .csv / history exports.
@@ -96,15 +165,16 @@ const LONG_INPUT_WARN_CHARS = 8000
 // new tab — the user submits it on GitHub, so no token ever enters the
 // browser. The repo is live at REPO_URL below; set REPO_LIVE to false to
 // disable the button again (e.g. if the repo is ever made private).
+// The URL itself is built by buildIssueUrl (src/export.js), which caps
+// its length so a very long report cannot overflow browser URL limits;
+// when the body had to be shortened, the result shows a notice pointing
+// at Copy as Markdown for the full report.
 const REPO_URL = 'https://github.com/Lnxyii/triage'
 const REPO_LIVE = true
 
-function buildIssueUrl(result) {
-  const title = `[${result.data.severity}] ${result.kind === 'full' ? result.data.title : result.data.summary}`
-  return `${REPO_URL}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(resultToMarkdown(result))}`
-}
-
 let lastResult = null
+let lastIssueUrl = null
+let lastIssueTruncated = false
 let lastReport = ''
 let lastRun = null
 let lastNano = 'unsupported'
@@ -215,6 +285,7 @@ function filteredHistoryEntries() {
   const sev = historySeverityFilter.value
   return entries.filter((e) => {
     if (sev && e.severity !== sev) return false
+    if (routeFilter && e.engine !== routeFilter) return false
     if (!q) return true
     return (
       (e.title || '').toLowerCase().includes(q) ||
@@ -228,7 +299,9 @@ function renderHistory() {
   const entries = loadHistory()
   const shown = filteredHistoryEntries()
   const filtering =
-    historySearch.value.trim() !== '' || historySeverityFilter.value !== ''
+    historySearch.value.trim() !== '' ||
+    historySeverityFilter.value !== '' ||
+    routeFilter !== ''
   historyEmpty.hidden = shown.length > 0
   historyEmpty.textContent =
     entries.length === 0
@@ -270,10 +343,15 @@ function renderHistory() {
         hour: '2-digit',
         minute: '2-digit',
       })
+      const chip = ROUTE_CHIP[e.engine] || {
+        text: String(e.engine || '').toUpperCase(),
+        cls: '',
+      }
       return `<li data-id="${e.id}" tabindex="0">
         <span class="severity ${e.severity.toLowerCase()}">${e.severity}</span>
         <span class="history-title">${escapeHtml(e.title)}</span>
-        <span class="history-time">${when}, ${ENGINE_LABEL[e.engine]?.text || e.engine}</span>
+        <span class="history-route ${chip.cls}">${chip.text}</span>
+        <span class="history-time">${when}</span>
         <button class="history-delete" data-delete-id="${e.id}" type="button" aria-label="Delete this history entry">×</button>
       </li>`
     })
@@ -325,12 +403,12 @@ function renderResult(result, { duplicate = null } = {}) {
 
   html += `<div class="result-head">
     ${engineBadge(engine)}
-    <span class="severity ${data.severity.toLowerCase()}">${data.severity}</span>
+    <span class="severity ${data.severity.toLowerCase()} stamp-pop">${data.severity}</span>
     <span class="latency">${latency} · ${escapeHtml(model)}</span>
   </div>
   <p class="fineprint">${privacyLine}</p>
   ${result.context ? `<p class="fineprint">Project context: ${escapeHtml(result.context)}</p>` : ''}
-  ${result.truncated ? `<p class="fineprint warn">Forced on-device: report truncated to ${FORCE_LOCAL_MAX_CHARS.toLocaleString()} characters (from ${Number(result.originalLength).toLocaleString()}) for the on-device model.</p>` : ''}
+  ${result.truncated ? `<p class="fineprint warn">Forced on-device: report truncated to ${FORCE_LOCAL_MAX_CHARS.toLocaleString()} characters (from ${Number(result.originalLength).toLocaleString()}) — middle cut, beginning and end kept — for the on-device model.</p>` : ''}
   ${result.forceLocalRequested && engine === 'in_cloud' ? '<p class="fineprint warn">On-device was requested but is unavailable on this device — this report was processed in the cloud instead.</p>' : ''}`
 
   if (kind === 'full') {
@@ -359,7 +437,7 @@ function renderResult(result, { duplicate = null } = {}) {
     <p>${escapeHtml(data.summary)}</p>
     <h4>CVSS</h4>
     ${cvssHtml}
-    ${data.confidence != null ? `<p class="fineprint">Severity confidence: ${Math.round(data.confidence * 100)}%</p>` : ''}
+    ${data.confidence != null ? confidenceHtml(data.confidence) : ''}
     <h4>Reproduction steps</h4>
     ${data.reproSteps.length ? `<ol>${data.reproSteps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>` : '<p>No steps could be inferred.</p>'}
     <h4>Proof-of-concept outline</h4>
@@ -374,8 +452,17 @@ function renderResult(result, { duplicate = null } = {}) {
     ${data.reproSteps.length ? `<ol>${data.reproSteps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>` : '<p>No steps could be inferred from the report.</p>'}
     <h4>Draft reply</h4>
     <p class="draft">${escapeHtml(data.draftReply)}</p>
-    ${data.confidence != null ? `<p class="fineprint">Severity confidence: ${Math.round(data.confidence * 100)}%</p>` : ''}`
+    ${data.confidence != null ? confidenceHtml(data.confidence) : ''}`
   }
+
+  // The issue URL is built once per result (and capped by buildIssueUrl);
+  // the click handler below opens exactly this URL.
+  const issueTitle = `[${data.severity}] ${kind === 'full' ? data.title : data.summary}`
+  const issue = REPO_LIVE
+    ? buildIssueUrl(REPO_URL, issueTitle, resultToMarkdown(result))
+    : null
+  lastIssueUrl = issue?.url || null
+  lastIssueTruncated = issue?.truncated || false
 
   html += `<div class="result-actions">
     ${kind === 'quick' ? '<button class="btn secondary" id="full-report-btn">Generate full report</button>' : ''}
@@ -385,7 +472,8 @@ function renderResult(result, { duplicate = null } = {}) {
     <button class="btn ghost" id="export-csv-btn">Export CSV</button>
     <button class="btn ghost" id="issue-btn" ${REPO_LIVE ? '' : 'disabled'}>Create GitHub Issue</button>
   </div>
-  ${REPO_LIVE ? '' : '<p class="fineprint">GitHub issue export unlocks once the public repo is live.</p>'}`
+  ${REPO_LIVE ? '' : '<p class="fineprint">GitHub issue export unlocks once the public repo is live.</p>'}
+  ${issue?.truncated ? '<p class="fineprint warn" id="issue-truncated-note">The GitHub issue link was shortened to fit the browser’s URL limit — use Copy as Markdown for the full report.</p>' : ''}`
 
 
   resultBody.innerHTML = html
@@ -398,7 +486,7 @@ function renderResult(result, { duplicate = null } = {}) {
   $('copy-json-btn').addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(lastResult, null, 2))
-      $('copy-json-btn').textContent = 'Copied ✓'
+      flashButton($('copy-json-btn'), '✓ COPIED')
     } catch {
       $('copy-json-btn').textContent = 'Copy failed'
     }
@@ -406,7 +494,7 @@ function renderResult(result, { duplicate = null } = {}) {
   $('copy-md-btn').addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(resultToMarkdown(lastResult))
-      $('copy-md-btn').textContent = 'Copied ✓'
+      flashButton($('copy-md-btn'), '✓ COPIED')
     } catch {
       $('copy-md-btn').textContent = 'Copy failed'
     }
@@ -417,7 +505,7 @@ function renderResult(result, { duplicate = null } = {}) {
       `triage-${lastResult.data.severity.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.md`,
       'text/markdown',
     )
-    $('download-md-btn').textContent = 'Downloaded ✓'
+    flashButton($('download-md-btn'), '✓ DOWNLOADED')
   })
   $('export-csv-btn').addEventListener('click', () => {
     downloadBlob(
@@ -425,12 +513,12 @@ function renderResult(result, { duplicate = null } = {}) {
       `triage-${lastResult.data.severity.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`,
       'text/csv',
     )
-    $('export-csv-btn').textContent = 'Exported ✓'
+    flashButton($('export-csv-btn'), '✓ EXPORTED')
   })
   const issueBtn = $('issue-btn')
   if (issueBtn && REPO_LIVE) {
     issueBtn.addEventListener('click', () => {
-      window.open(buildIssueUrl(lastResult), '_blank', 'noopener')
+      window.open(lastIssueUrl, '_blank', 'noopener')
     })
   }
 }
@@ -512,6 +600,10 @@ async function runTriage({ forceFull = false, demoOnly = false } = {}) {
   loadingText.textContent = forceFull
     ? 'Generating full report in the cloud…'
     : 'Triaging…'
+  // The pipeline readout starts on the scrub stage; one frame lets it
+  // paint before the synchronous scrub + route preamble runs.
+  setPipelineStage('scrub')
+  await new Promise((resolve) => requestAnimationFrame(resolve))
   try {
     let result
     if (demoOnly) {
@@ -521,6 +613,8 @@ async function runTriage({ forceFull = false, demoOnly = false } = {}) {
       const scrubbed = scrubToggle.checked
         ? scrubReport(report)
         : { text: report, redactions: [], total: 0 }
+      // Scrub done — the real scrubReport call above just returned.
+      setPipelineStage('route')
       const started = performance.now()
       let text = scrubbed.text
       let truncated = false
@@ -532,6 +626,8 @@ async function runTriage({ forceFull = false, demoOnly = false } = {}) {
         originalLength = t.originalLength
       }
       const kind = forceFull || routeFor(text) === 'full' ? 'full' : 'quick'
+      // Route done — routeFor just decided the kind; local rules next.
+      setPipelineStage('ai')
       result = {
         kind,
         data: demoTriage(text, kind),
@@ -545,8 +641,13 @@ async function runTriage({ forceFull = false, demoOnly = false } = {}) {
         truncated,
         originalLength,
       }
+      // Local-rules triage done; rendering next.
+      setPipelineStage('render')
     } else {
-      result = await triage(report, {
+      // triage()'s synchronous preamble — scrub, then the route
+      // decision — has run by the time this call returns its promise,
+      // so scrub and route are genuinely done and the AI call is in flight.
+      const pending = triage(report, {
         forceFull,
         scrub: scrubToggle.checked,
         context,
@@ -555,17 +656,24 @@ async function runTriage({ forceFull = false, demoOnly = false } = {}) {
           loadingText.textContent = `Retrying… (attempt ${attempt + 1} of 3)`
         },
       })
+      setPipelineStage('ai')
+      result = await pending
+      setPipelineStage('render')
     }
     lastResult = result
     // Duplicate check runs against the history BEFORE this entry is added,
     // so the new result never matches itself.
     const duplicate = findDuplicate(result.report, loadHistory())
     renderResult(result, { duplicate })
+    // Render done — the result is on screen; every stage is complete.
+    setPipelineStage(null)
     // History stores the scrubbed text — the text the model actually
     // saw — so secrets never reach localStorage either.
     addHistoryEntry({ report: result.report, result })
     renderHistory()
     setChip(result.engine)
+    // Once per session, point at the export after the first triage.
+    maybePulseExportCoachmark()
   } catch (err) {
     renderError(err?.message || String(err))
   } finally {
@@ -653,6 +761,17 @@ projectContext.addEventListener('input', () =>
 )
 historySearch.addEventListener('input', renderHistory)
 historySeverityFilter.addEventListener('change', renderHistory)
+historyRouteFilter.addEventListener('click', (event) => {
+  const pill = event.target.closest('[data-route]')
+  if (!pill) return
+  routeFilter = pill.dataset.route
+  for (const p of historyRouteFilter.querySelectorAll('.route-pill')) {
+    const active = p === pill
+    p.classList.toggle('active', active)
+    p.setAttribute('aria-pressed', String(active))
+  }
+  renderHistory()
+})
 exportHistoryBtn.addEventListener('click', () => {
   const entries = loadHistory()
   const stamp = new Date().toISOString().slice(0, 10)

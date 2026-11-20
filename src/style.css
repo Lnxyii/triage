@@ -410,6 +410,16 @@ textarea::placeholder {
 }
 .btn.small { min-height: 32px; padding: 0 var(--space-sm); font-size: var(--text-xs); }
 
+/* Coachmark border pulse: once per session, after the first triage, the
+   primary export button's 1px border pulses ink and back — one cycle,
+   no colour, no shadow — then stops. */
+@keyframes coachmark-pulse {
+  0% { border-color: var(--color-rule); }
+  50% { border-color: var(--color-ink); }
+  100% { border-color: var(--color-rule); }
+}
+.btn.coachmark-pulse { animation: coachmark-pulse 900ms var(--ease-out) 1; }
+
 .actions { display: flex; gap: var(--space-xs); margin-top: var(--space-md); flex-wrap: wrap; }
 .fineprint { color: var(--color-muted); font-size: var(--text-sm); margin: var(--space-sm) 0 0; }
 .fineprint.warn { color: var(--demo); font-weight: 500; }
@@ -442,6 +452,29 @@ textarea::placeholder {
 /* History controls: search + severity filter + export, one wrapping row. */
 .history-controls { display: flex; gap: var(--space-xs); flex-wrap: wrap; align-items: center; margin: var(--space-sm) 0 0; }
 .history-controls input[type="search"] { flex: 1 1 12rem; min-width: 0; }
+
+/* History route filter: mono pill toggles, one route at a time. The active
+   pill is ink-filled; the rest are hairline-outlined like the ghost buttons. */
+.route-filter { display: flex; gap: var(--space-2xs); flex-wrap: wrap; margin-top: var(--space-sm); }
+.route-pill {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--text-xs);
+  min-height: 32px;
+  padding: var(--space-2xs) var(--space-xs);
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  transition: background-color var(--dur-short) var(--ease-out), border-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out);
+}
+.route-pill:hover { border-color: var(--color-ink); color: var(--color-ink); }
+.route-pill.active { background: var(--color-ink); border-color: var(--color-ink); color: var(--color-accent-ink); }
+.route-pill:focus-visible {
+  outline: var(--rule-heavy) solid var(--color-focus);
+  outline-offset: var(--space-2xs);
+}
 #prepare-note { margin-top: var(--space-xs); }
 
 .sample-btn {
@@ -512,6 +545,14 @@ textarea::placeholder {
 .severity.medium { background: var(--sev-medium-bg); color: var(--sev-medium); }
 .severity.low { background: var(--sev-low-bg); color: var(--sev-low); }
 
+/* Severity stamp pop: the result's severity badge stamps in with a short
+   scale/opacity pop on the existing motion tokens — one 150 ms beat. */
+@keyframes stamp-pop {
+  from { transform: scale(1.18); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.severity.stamp-pop { animation: stamp-pop var(--dur-short) var(--ease-out); }
+
 /* --- Result ------------------------------------------------------------ */
 
 .result-head {
@@ -579,6 +620,58 @@ textarea::placeholder {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Pipeline staged readout: the real triage stages in mono, one per line.
+   The mark is the state — hollow while pending, filled while running,
+   a check when done. No fake progress: stages flip only as the code
+   actually passes them (see setPipelineStage in main.js). */
+.pipeline {
+  list-style: none;
+  margin: 0 0 var(--space-sm);
+  padding: 0;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.pipeline li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) 0;
+}
+.pipeline li .stage-mark::before { content: '○'; }
+.pipeline li[data-state="active"] { color: var(--color-ink); }
+.pipeline li[data-state="active"] .stage-mark::before { content: '●'; }
+.pipeline li[data-state="done"] .stage-mark::before { content: '✓'; }
+#loading-text { margin-top: var(--space-xs); }
+
+/* Severity confidence, same dimension-string language as the route meter:
+   a hairline track, an ink fill drawn with scaleX (never width), and the
+   mono percentage. The value is the model's own overall confidence —
+   never invented per-field. */
+.confidence {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.confidence-meter {
+  position: relative;
+  flex: 1;
+  height: var(--space-2xs);
+  background: var(--color-rule);
+}
+.confidence-meter-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--color-ink);
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+.confidence .num { color: var(--color-ink); }
+
 .result-error {
   background: var(--danger-bg);
   border: var(--rule-hair) solid var(--danger-border);
@@ -617,6 +710,20 @@ textarea::placeholder {
 }
 .history-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-time { color: var(--color-muted); font-size: var(--text-xs); white-space: nowrap; }
+/* Route chip: a small mono tag naming where the entry ran. Same engine
+   colours as the badges, hairline border, no fill beyond the badge tint. */
+.history-route {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--text-xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border: var(--rule-hair) solid var(--color-rule);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+.history-route.on-device { color: var(--on-device); border-color: var(--on-device-border); }
+.history-route.cloud { color: var(--cloud); border-color: var(--cloud-border); }
+.history-route.demo { color: var(--demo); border-color: var(--demo-border); }
 .history-delete {
   flex-shrink: 0;
   width: 28px;
@@ -644,6 +751,7 @@ textarea::placeholder {
   color: var(--color-muted);
   font-size: var(--text-sm);
 }
+.stack-line { margin: var(--space-xs) 0 0; font-size: var(--text-xs); }
 
 /* --- Dark mode (prefers-color-scheme) -----------------------------------
    Same Blueprint tokens, inverted: dark prussian ground, paper ink. The
@@ -700,6 +808,8 @@ textarea::placeholder {
   .route-meter-fill { transition: none; }
   .btn, .sample-btn { transition: none; }
   .btn:active, .sample-btn:active { transform: none; }
+  .severity.stamp-pop, .btn.coachmark-pulse { animation: none; }
+  .route-pill { transition: none; }
 }
 
 /* --- Mobile (390px) ---------------------------------------------------- */
